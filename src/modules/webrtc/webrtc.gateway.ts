@@ -95,16 +95,36 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
         isRecording: room.recording.isRecording,
       });
 
-      // Notify other peers
+      // Send the full participant list to the joining peer (excluding themselves)
       const otherPeers = this.roomService.getRoomPeersExcept(room.id, peerId);
-      socket.to(room.id).emit('peerJoined', {
+      this.logger.log(
+        `Room ${room.name} has ${otherPeers.length} other peers for ${data.peerName}:`,
+        otherPeers.map((p) => ({ id: p.id, name: p.name })),
+      );
+      socket.emit('participantList', {
+        participants: otherPeers.map((p) => ({ id: p.id, name: p.name })),
+      });
+
+      // Notify other peers
+      const otherPeersForOthers = this.roomService.getRoomPeersExcept(
+        room.id,
         peerId,
-        peerName: data.peerName,
+      );
+      this.logger.log(
+        `Emitting peerJoined to ${otherPeersForOthers.length} other peers for new peer ${data.peerName} (${peerId})`,
+      );
+      this.logger.log(
+        `Other peers:`,
+        otherPeersForOthers.map((p) => ({ id: p.id, name: p.name })),
+      );
+      socket.to(room.id).emit('peerJoined', {
+        id: peerId,
+        name: data.peerName,
       });
 
       // Send existing peers to the new peer
       socket.emit('existingPeers', {
-        peers: otherPeers.map((p) => ({ id: p.id, name: p.name })),
+        peers: otherPeersForOthers.map((p) => ({ id: p.id, name: p.name })),
       });
     } catch (error) {
       this.logger.error('Failed to join room:', error);
@@ -125,7 +145,8 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
         throw new Error('Room not found');
       }
 
-      const peer = this.roomService.getPeer(roomId, data.peerId);
+      // Use socket.data.peerId instead of data.peerId
+      const peer = this.roomService.getPeer(roomId, socket.data.peerId);
       if (!peer) {
         throw new Error('Peer not found');
       }
@@ -134,6 +155,9 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
         room.router,
         data.direction,
       );
+
+      // Set appData.direction on transport for later identification
+      transportData.transport.appData = { direction: data.direction };
 
       // Store transport in peer data
       peer.transports.set(transportData.id, transportData.transport);
@@ -157,6 +181,7 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     try {
       const roomId = socket.data.roomId;
+      // Use socket.data.peerId instead of data.peerId if applicable
       const peerId = socket.data.peerId;
       const peer = this.roomService.getPeer(roomId, peerId);
 
@@ -184,7 +209,8 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     try {
       const roomId = socket.data.roomId;
-      const peer = this.roomService.getPeer(roomId, data.peerId);
+      // Use socket.data.peerId instead of data.peerId
+      const peer = this.roomService.getPeer(roomId, socket.data.peerId);
 
       if (!peer) {
         throw new Error('Peer not found');
@@ -207,7 +233,7 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Notify other peers about new producer
       socket.to(roomId).emit('newProducer', {
-        peerId: data.peerId,
+        peerId: socket.data.peerId,
         producerId: producer.id,
         kind: data.kind,
       });
@@ -225,7 +251,8 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
     try {
       const roomId = socket.data.roomId;
       const room = this.roomService.getRoom(roomId);
-      const peer = this.roomService.getPeer(roomId, data.peerId);
+      // Use socket.data.peerId instead of data.peerId
+      const peer = this.roomService.getPeer(roomId, socket.data.peerId);
 
       if (!room || !peer) {
         throw new Error('Room or peer not found');
@@ -274,6 +301,7 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
         producerId: producer.id,
         kind: consumer.kind,
         rtpParameters: consumer.rtpParameters,
+        peerId: producerPeer.id, // Add the producer's peer ID
       });
     } catch (error) {
       this.logger.error('Failed to consume:', error);
@@ -288,8 +316,8 @@ export class WebRTCGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     try {
       const roomId = socket.data.roomId;
-      const peerId = socket.data.peerId;
-      const peer = this.roomService.getPeer(roomId, peerId);
+      // Use socket.data.peerId instead of data.peerId
+      const peer = this.roomService.getPeer(roomId, socket.data.peerId);
 
       if (!peer) {
         throw new Error('Peer not found');

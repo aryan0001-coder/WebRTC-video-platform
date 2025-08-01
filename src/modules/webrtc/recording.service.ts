@@ -124,6 +124,7 @@ export class RecordingService {
           .input(`rtp://127.0.0.1:${plainTransport.port}`)
           .inputOptions(['-protocol_whitelist', 'file,rtp,udp', '-f', 'rtp'])
           .videoCodec(mediasoupConfig.recording.videoCodec)
+          .audioFilter(ffmpeg.availableEncoders.apply(Audio))
           .audioCodec(mediasoupConfig.recording.audioCodec)
           .outputOptions([
             '-f',

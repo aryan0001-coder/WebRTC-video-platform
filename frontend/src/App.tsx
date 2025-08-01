@@ -29,7 +29,7 @@ function App() {
         <VideoCall
           roomName={roomName}
           userName={userName}
-          serverUrl={process.env.REACT_APP_SERVER_URL || 'http://localhost:3001'}
+          serverUrl={process.env.REACT_APP_SERVER_URL || 'http://localhost:3000'}
         />
       )}
     </div>

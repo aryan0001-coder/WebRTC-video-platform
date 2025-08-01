@@ -74,7 +74,7 @@ export const mediasoupConfig: WebRTCConfig = {
       listenIps: [
         {
           ip: '0.0.0.0',
-          announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP || '127.0.0.1',
+          announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP || 'localhost',
         },
       ],
       maxIncomingBitrate: 1500000,
@@ -83,7 +83,7 @@ export const mediasoupConfig: WebRTCConfig = {
     plainTransport: {
       listenIp: {
         ip: '0.0.0.0',
-        announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP || '127.0.0.1',
+        announcedIp: process.env.MEDIASOUP_ANNOUNCED_IP || 'localhost',
       },
       rtcpMux: false,
       comedia: true,

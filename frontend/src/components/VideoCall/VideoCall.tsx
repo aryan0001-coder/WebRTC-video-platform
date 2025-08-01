@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import styled from 'styled-components';
 import { WebRTCClient, PeerInfo } from '../WebRTC/WebRTCClient';
+import VideoGrid from './VideoGrid';
+import ParticipantsList from './participantsList';
 
 const VideoCallContainer = styled.div`
   display: flex;
@@ -55,62 +57,6 @@ const VideoArea = styled.div`
   position: relative;
   background: #000;
   padding: 1rem;
-`;
-
-const VideoGrid = styled.div<{ videoCount: number }>`
-  display: grid;
-  gap: 10px;
-  width: 100%;
-  height: 100%;
-  grid-template-columns: ${props => {
-    if (props.videoCount === 1) return '1fr';
-    if (props.videoCount === 2) return '1fr 1fr';
-    if (props.videoCount <= 4) return '1fr 1fr';
-    return '1fr 1fr 1fr';
-  }};
-  grid-template-rows: ${props => {
-    if (props.videoCount <= 2) return '1fr';
-    if (props.videoCount <= 4) return '1fr 1fr';
-    return 'repeat(auto-fit, minmax(200px, 1fr))';
-  }};
-`;
-
-const VideoContainer = styled.div<{ isLocal?: boolean }>`
-  position: relative;
-  background: #333;
-  border-radius: 8px;
-  overflow: hidden;
-  border: ${props => props.isLocal ? '2px solid #4CAF50' : '1px solid #555'};
-  min-height: 200px;
-`;
-
-const VideoElement = styled.video`
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-`;
-
-const VideoPlaceholder = styled.div`
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  background: #333;
-  color: #ccc;
-`;
-
-const ParticipantLabel = styled.div<{ isLocal?: boolean }>`
-  position: absolute;
-  bottom: 8px;
-  left: 8px;
-  background: ${props => props.isLocal ? 'rgba(76, 175, 80, 0.8)' : 'rgba(0, 0, 0, 0.7)'};
-  color: white;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 0.8rem;
-  font-weight: 500;
 `;
 
 const ControlsContainer = styled.div`
@@ -209,16 +155,22 @@ interface RemoteStream {
 const VideoCall: React.FC<VideoCallProps> = ({ 
   roomName, 
   userName, 
-  serverUrl = 'http://localhost:3001' 
+  serverUrl = 'http://localhost:3000' 
 }) => {
   const [webrtcClient, setWebrtcClient] = useState<WebRTCClient | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [participants, setParticipants] = useState<PeerInfo[]>([]);
+  const participantsRef = React.useRef<PeerInfo[]>([]);
+  const [localPeerId, setLocalPeerId] = useState<string | null>(null);
+  // Track recently processed peer IDs to prevent duplicates
+  const recentlyProcessedPeers = React.useRef<Set<string>>(new Set());
   const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
   const [localAudioStream, setLocalAudioStream] = useState<MediaStream | null>(null);
   const [remoteStreams, setRemoteStreams] = useState<Map<string, RemoteStream>>(new Map());
   const [isVideoEnabled, setIsVideoEnabled] = useState(false);
   const [isAudioEnabled, setIsAudioEnabled] = useState(false);
+  const [hasVideoEverBeenEnabled, setHasVideoEverBeenEnabled] = useState(false);
+  const [hasAudioEverBeenEnabled, setHasAudioEverBeenEnabled] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingId, setRecordingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -228,6 +180,25 @@ const VideoCall: React.FC<VideoCallProps> = ({
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const clientRef = useRef<WebRTCClient | null>(null);
+
+  // Add a custom setParticipants function to track all changes
+  const setParticipantsWithLogging = (newParticipants: PeerInfo[] | ((prev: PeerInfo[]) => PeerInfo[])) => {
+    setParticipants((prev) => {
+      const next = typeof newParticipants === 'function' ? newParticipants(prev) : newParticipants;
+      
+      // Final safeguard: filter out local peer from participants list
+      const filteredNext = next.filter(p => p.id !== localPeerId);
+      
+      console.log('🔄 Participants state changed:', {
+        from: prev.map(p => ({ id: p.id, name: p.name })),
+        to: filteredNext.map(p => ({ id: p.id, name: p.name })),
+        count: { from: prev.length, to: filteredNext.length },
+        localPeerId
+      });
+      
+      return filteredNext;
+    });
+  };
 
   const initializeWebRTC = async () => {
     try {
@@ -240,37 +211,151 @@ const VideoCall: React.FC<VideoCallProps> = ({
       setWebrtcClient(client);
 
       // Set up event handlers
+      client.onJoined = (peerId: string) => {
+        console.log('🎯 Setting localPeerId:', peerId);
+        setLocalPeerId(peerId);
+      };
+
       client.onPeerJoined = (peer: PeerInfo) => {
-        console.log('👥 Peer joined:', peer);
-        setParticipants(prev => [...prev.filter(p => p.id !== peer.id), peer]);
+        console.log('👥 Peer joined event received:', peer, 'localPeerId:', localPeerId);
+        console.log('👥 Current participants before adding:', participantsRef.current.map(p => ({ id: p.id, name: p.name })));
+        console.log('👥 recentlyProcessedPeers:', Array.from(recentlyProcessedPeers.current));
+        
+        // Check if we've recently processed this peer to prevent duplicates
+        if (recentlyProcessedPeers.current.has(peer.id)) {
+          console.log('⚠️ Peer recently processed, skipping duplicate:', peer.id, peer.name);
+          return;
+        }
+        
+        setParticipantsWithLogging((prev) => {
+          // Skip if localPeerId is not set yet
+          if (!localPeerId) {
+            console.log('localPeerId not set yet, skipping peerJoined event for:', peer.id);
+            return prev;
+          }
+          // Do not add if this is the local peer
+          if (peer.id === localPeerId) {
+            console.log('⚠️ LOCAL PEER DETECTED IN PEERJOINED EVENT - skipping:', peer.id, peer.name);
+            return prev;
+          }
+          // Only add if not already present
+          if (prev.some((p) => p.id === peer.id)) {
+            console.log('Peer already in list, skipping:', peer.id);
+            return prev;
+          }
+          console.log('✅ Adding new peer to participants:', peer.name, peer.id);
+          
+          // Mark this peer as recently processed
+          recentlyProcessedPeers.current.add(peer.id);
+          // Remove from recently processed after 1 second (reduced from 5 seconds)
+          setTimeout(() => {
+            recentlyProcessedPeers.current.delete(peer.id);
+            console.log('🔄 Removed peer from recentlyProcessedPeers:', peer.id);
+          }, 1000);
+          
+          const newParticipants = [...prev, peer];
+          // Deduplicate by id
+          const deduped = Array.from(new Map(newParticipants.map(p => [p.id, p])).values());
+          participantsRef.current = deduped;
+          console.log('Updated participants after peerJoined:', deduped);
+          
+          // Update any existing streams for this peer with their proper name
+          setRemoteStreams((prevStreams) => {
+            const newStreams = new Map(prevStreams);
+            for (const [key, stream] of newStreams) {
+              if (stream.peerId === peer.id) {
+                newStreams.set(key, {
+                  ...stream,
+                  name: peer.name,
+                });
+              }
+            }
+            return newStreams;
+          });
+          
+          return deduped;
+        });
+      };
+
+      // Listen for the full participant list on join
+      client.onParticipantList = (peers: PeerInfo[]) => {
+        console.log('📋 Received full participant list:', peers);
+        console.log('📋 Participant IDs:', peers.map(p => p.id));
+        console.log('📋 Participant names:', peers.map(p => p.name));
+        console.log('📋 Full participant details:', JSON.stringify(peers, null, 2));
+        console.log('📋 Current localPeerId:', localPeerId);
+        
+        // Check if local peer is in the received list
+        const localPeerInList = peers.find(p => p.id === localPeerId);
+        if (localPeerInList) {
+          console.warn('⚠️ LOCAL PEER FOUND IN PARTICIPANT LIST:', localPeerInList);
+        }
+        
+        // Check for duplicates in the received list
+        const duplicateIds = peers.filter((peer, index) => 
+          peers.findIndex(p => p.id === peer.id) !== index
+        );
+        if (duplicateIds.length > 0) {
+          console.warn('⚠️ DUPLICATES FOUND IN PARTICIPANT LIST:', duplicateIds);
+        }
+        
+        // Deduplicate by id
+        const deduped = Array.from(new Map(peers.map(p => [p.id, p])).values());
+        console.log('📋 Deduplicated list:', deduped);
+        console.log('📋 Deduplicated IDs:', deduped.map(p => p.id));
+        
+        setParticipantsWithLogging(deduped);
+        participantsRef.current = deduped;
       };
 
       client.onPeerLeft = (peerId: string) => {
         console.log('👋 Peer left:', peerId);
-        setParticipants(prev => prev.filter(p => p.id !== peerId));
-        setRemoteStreams(prev => {
+        setParticipantsWithLogging((prev) => {
+          const updated = prev.filter((p) => p.id !== peerId);
+          participantsRef.current = updated;
+          console.log('Updated participants after peer left:', updated);
+          return updated;
+        });
+        setRemoteStreams((prev) => {
           const newStreams = new Map(prev);
           for (const [key, stream] of newStreams) {
             if (stream.peerId === peerId) {
+              console.log('Removing stream for peer:', peerId, 'key:', key);
               newStreams.delete(key);
             }
           }
+          console.log('Updated remoteStreams after peer left:', newStreams);
           return newStreams;
         });
       };
 
       client.onNewStream = (peerId: string, stream: MediaStream, kind: string) => {
-        console.log('📹 New stream from peer:', peerId, kind);
-        const participant = participants.find(p => p.id === peerId);
-        setRemoteStreams(prev => {
+        console.log('📹 [STREAM DEBUG] New stream from peer:', peerId, kind);
+        console.log('📹 [STREAM DEBUG] Current participants:', participantsRef.current.map(p => ({ id: p.id, name: p.name })));
+        
+        setRemoteStreams((prev) => {
           const newStreams = new Map(prev);
           const key = `${peerId}-${kind}`;
-          newStreams.set(key, {
-            peerId,
-            stream,
-            kind: kind as 'video' | 'audio',
-            name: participant?.name || 'Unknown',
-          });
+          // Use participantsRef to get latest participants
+          const participant = participantsRef.current.find((p) => p.id === peerId);
+          if (!participant) {
+            console.log('⚠️ [STREAM DEBUG] Stream received for unknown peer:', peerId, 'kind:', kind, '- waiting for peer to be added');
+            // Don't create unknown participant, just store the stream temporarily
+            newStreams.set(key, {
+              peerId,
+              stream,
+              kind: kind as 'video' | 'audio',
+              name: peerId, // Use peerId as temporary name
+            });
+          } else {
+            console.log('✅ [STREAM DEBUG] Stream received for known peer:', participant.name, 'kind:', kind);
+            newStreams.set(key, {
+              peerId,
+              stream,
+              kind: kind as 'video' | 'audio',
+              name: participant.name,
+            });
+          }
           return newStreams;
         });
       };
@@ -278,6 +363,40 @@ const VideoCall: React.FC<VideoCallProps> = ({
       client.onLocalStreamReady = (stream: MediaStream, kind: 'video' | 'audio') => {
         console.log(`📹 Local ${kind} stream ready`);
         if (kind === 'video') {
+          // Add event listeners to video track to detect ended or inactive
+          const videoTrack = stream.getVideoTracks()[0];
+          if (videoTrack) {
+            videoTrack.onended = () => {
+              console.warn('⚠️ Local video track ended');
+              setLocalVideoStream(null);
+              setIsVideoEnabled(false);
+              setError('Your camera video track ended unexpectedly.');
+              // Optionally try to re-enable webcam after short delay
+              setTimeout(() => {
+                if (clientRef.current) {
+                  clientRef.current.enableWebcam().catch((err) => {
+                    console.error('Failed to re-enable webcam:', err);
+                    setError('Failed to re-enable webcam after video track ended.');
+                  });
+                }
+              }, 3000);
+            };
+            videoTrack.addEventListener('inactive', () => {
+              console.warn('⚠️ Local video track inactive');
+              setLocalVideoStream(null);
+              setIsVideoEnabled(false);
+              setError('Your camera video track became inactive.');
+              // Optionally try to re-enable webcam after short delay
+              setTimeout(() => {
+                if (clientRef.current) {
+                  clientRef.current.enableWebcam().catch((err) => {
+                    console.error('Failed to re-enable webcam:', err);
+                    setError('Failed to re-enable webcam after video track became inactive.');
+                  });
+                }
+              }, 3000);
+            });
+          }
           setLocalVideoStream(stream);
           if (localVideoRef.current) {
             localVideoRef.current.srcObject = stream;
@@ -306,17 +425,14 @@ const VideoCall: React.FC<VideoCallProps> = ({
 
       // Join the room
       setConnectionStatus('Joining room...');
-      await client.joinRoom(roomName, userName);
-      console.log('✅ Successfully joined room');
-      
-      setIsConnected(true);
-      setConnectionStatus('Connected');
+      const joinData = await client.joinRoom(roomName, userName);
 
       // Start camera and microphone
       setConnectionStatus('Starting camera...');
       try {
         await client.enableWebcam();
         setIsVideoEnabled(true);
+        setHasVideoEverBeenEnabled(true);
         console.log('📹 Camera enabled');
       } catch (err) {
         console.log('📹 Camera failed, continuing without video');
@@ -324,10 +440,15 @@ const VideoCall: React.FC<VideoCallProps> = ({
 
       setConnectionStatus('Starting microphone...');
       try {
-        await client.enableMicrophone();
+        console.log('🎤 [VIDEOCALL DEBUG] Attempting to enable microphone...');
+        const audioStream = await client.enableMicrophone();
         setIsAudioEnabled(true);
-        console.log('🎤 Microphone enabled');
+        setHasAudioEverBeenEnabled(true);
+        console.log(audioStream)
+        console.log('🎤 [VIDEOCALL DEBUG] Microphone enabled successfully, stream:', audioStream);
+        console.log('🎤 [VIDEOCALL DEBUG] Audio tracks:', audioStream.getAudioTracks());
       } catch (err) {
+        console.error('🎤 [VIDEOCALL ERROR] Microphone failed:', err);
         console.log('🎤 Microphone failed, continuing without audio');
       }
 
@@ -342,35 +463,68 @@ const VideoCall: React.FC<VideoCallProps> = ({
   };
 
   const handleToggleVideo = async () => {
-    if (!webrtcClient) return;
+    if (!webrtcClient) {
+      console.error('❌ WebRTC client not available');
+      return;
+    }
 
     try {
+      console.log('🔄 Toggling video...', { 
+        currentState: isVideoEnabled,
+        hasVideoEverBeenEnabled,
+        localVideoStream: !!localVideoStream
+      });
+      
       if (isVideoEnabled) {
         await webrtcClient.disableWebcam();
-        setLocalVideoStream(null);
+        // Don't set localVideoStream to null - keep the stream but it's disabled
         setIsVideoEnabled(false);
+        console.log('📹 Video disabled');
       } else {
-        await webrtcClient.enableWebcam();
+        const stream = await webrtcClient.enableWebcam();
+        setLocalVideoStream(stream);
         setIsVideoEnabled(true);
+        setHasVideoEverBeenEnabled(true);
+        console.log('📹 Video enabled, stream:', stream);
       }
     } catch (error) {
+      console.error('❌ Error toggling video:', error);
       setError(`Failed to toggle video: ${error}`);
     }
   };
 
   const handleToggleAudio = async () => {
-    if (!webrtcClient) return;
+    if (!webrtcClient) {
+      console.error('❌ WebRTC client not available');
+      alert("vghjk")
+      return;
+    }
 
     try {
+      console.log('🔄 [AUDIO TOGGLE DEBUG] Toggling audio...', { 
+        currentState: isAudioEnabled,
+        hasAudioEverBeenEnabled,
+        localAudioStream: !!localAudioStream
+      });
+      
       if (isAudioEnabled) {
+        console.log('🔄 [AUDIO TOGGLE DEBUG] Disabling audio...');
         await webrtcClient.disableMicrophone();
-        setLocalAudioStream(null);
+        // Don't set localAudioStream to null - keep the stream but it's disabled
         setIsAudioEnabled(false);
+        console.log('🎤 [AUDIO TOGGLE DEBUG] Audio disabled');
       } else {
-        await webrtcClient.enableMicrophone();
+        console.log('🔄 [AUDIO TOGGLE DEBUG] Enabling audio...');
+        const stream = await webrtcClient.enableMicrophone();
+
+        setLocalAudioStream(stream);
         setIsAudioEnabled(true);
+        setHasAudioEverBeenEnabled(true);
+        console.log('🎤 [AUDIO TOGGLE DEBUG] Audio enabled, stream:', stream);
+        console.log('🎤 [AUDIO TOGGLE DEBUG] Audio tracks:', stream.getAudioTracks());
       }
     } catch (error) {
+      console.error('❌ [AUDIO TOGGLE ERROR] Error toggling audio:', error);
       setError(`Failed to toggle audio: ${error}`);
     }
   };
@@ -404,22 +558,15 @@ const VideoCall: React.FC<VideoCallProps> = ({
 
   // Cleanup on unmount
   useEffect(() => {
+    if (!hasStarted) {
+      initializeWebRTC();
+    }
     return () => {
       if (clientRef.current) {
         clientRef.current.disconnect();
       }
     };
-  }, []);
-
-  // Update remote video elements when streams change
-  useEffect(() => {
-    remoteStreams.forEach((streamInfo, key) => {
-      const videoElement = remoteVideoRefs.current.get(key);
-      if (videoElement && streamInfo.kind === 'video') {
-        videoElement.srcObject = streamInfo.stream;
-      }
-    });
-  }, [remoteStreams]);
+  }, []); // Remove participants from dependency array
 
   if (!hasStarted) {
     return (
@@ -460,70 +607,30 @@ const VideoCall: React.FC<VideoCallProps> = ({
     );
   }
 
-  // Calculate total video streams for grid layout
-  const remoteVideoStreams = Array.from(remoteStreams.values()).filter(s => s.kind === 'video');
-  const totalVideoStreams = (localVideoStream ? 1 : 0) + remoteVideoStreams.length;
-
   return (
     <VideoCallContainer>
       <Header>
-        <RoomInfo>
-          <h2>{roomName}</h2>
-          <p>{participants.length + 1} participant{participants.length !== 0 ? 's' : ''}</p>
-        </RoomInfo>
+          <RoomInfo>
+            <h2>{roomName}</h2>
+            <p>{participants.length} participant{participants.length !== 1 ? 's' : ''}</p>
+          </RoomInfo>
         <ConnectionStatus connected={isConnected}>
           {connectionStatus}
         </ConnectionStatus>
       </Header>
 
       <VideoArea>
-        <VideoGrid videoCount={Math.max(totalVideoStreams, 1)}>
-          {/* Local video */}
-          <VideoContainer isLocal={true}>
-            {isVideoEnabled && localVideoStream ? (
-              <VideoElement
-                ref={localVideoRef}
-                autoPlay
-                playsInline
-                muted
-              />
-            ) : (
-              <VideoPlaceholder>
-                <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>
-                  {isVideoEnabled ? '📹' : '📵'}
-                </div>
-                <div>
-                  {isVideoEnabled ? 'Camera Loading...' : 'Camera Off'}
-                </div>
-              </VideoPlaceholder>
-            )}
-            <ParticipantLabel isLocal={true}>
-              {userName} (You)
-            </ParticipantLabel>
-          </VideoContainer>
-
-          {/* Remote videos */}
-          {remoteVideoStreams.map((streamInfo) => {
-            const key = `${streamInfo.peerId}-video`;
-            return (
-              <VideoContainer key={key}>
-                <VideoElement
-                  ref={(el) => {
-                    if (el) {
-                      remoteVideoRefs.current.set(key, el);
-                      el.srcObject = streamInfo.stream;
-                    }
-                  }}
-                  autoPlay
-                  playsInline
-                />
-                <ParticipantLabel>
-                  {streamInfo.name || 'Remote User'}
-                </ParticipantLabel>
-              </VideoContainer>
-            );
-          })}
-        </VideoGrid>
+        <VideoGrid
+          localVideoStream={localVideoStream}
+          localAudioStream={localAudioStream}
+          remoteStreams={remoteStreams}
+          participants={participants}
+          userName={userName}
+          isVideoEnabled={isVideoEnabled}
+          isAudioEnabled={isAudioEnabled}
+          hasVideoEverBeenEnabled={hasVideoEverBeenEnabled}
+          hasAudioEverBeenEnabled={hasAudioEverBeenEnabled}
+        />
         
         <ControlsContainer>
           <ControlButton

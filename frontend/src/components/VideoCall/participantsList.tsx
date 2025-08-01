@@ -106,6 +106,26 @@ const ParticipantsList: React.FC<ParticipantsListProps> = ({
   participants,
   currentUserId,
 }) => {
+  console.log('🎨 ParticipantsList rendering:', {
+    participants: participants.map(p => ({ id: p.id, name: p.name })),
+    currentUserId,
+    count: participants.length
+  });
+  
+  // Check for duplicates in the props
+  const duplicateIds = participants.filter((participant, index) => 
+    participants.findIndex(p => p.id === participant.id) !== index
+  );
+  if (duplicateIds.length > 0) {
+    console.warn('⚠️ DUPLICATES IN PARTICIPANTS PROPS:', duplicateIds);
+  }
+  
+  // Check if current user is in the participants list
+  const currentUserInList = participants.find(p => p.id === currentUserId);
+  if (currentUserInList) {
+    console.warn('⚠️ CURRENT USER FOUND IN PARTICIPANTS PROPS:', currentUserInList);
+  }
+
   const getInitials = (name: string) => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
