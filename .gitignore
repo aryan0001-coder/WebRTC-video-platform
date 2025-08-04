@@ -4,8 +4,8 @@
 /build
 
 # Frontend build (will be built during deployment)
-frontend/build
-frontend/node_modules
+frontend/build/
+frontend/node_modules/
 
 # Logs
 logs
