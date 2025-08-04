@@ -263,9 +263,9 @@ const VideoCall: React.FC<VideoCallProps> = ({
           setRemoteStreams((prevStreams) => {
             const newStreams = new Map(prevStreams);
             for (const [key, stream] of newStreams) {
-              if (stream.peerId === peer.id) {
+              if ((stream as RemoteStream).peerId === peer.id) {
                 newStreams.set(key, {
-                  ...stream,
+                  ...(stream as RemoteStream),
                   name: peer.name,
                 });
               }
@@ -319,7 +319,7 @@ const VideoCall: React.FC<VideoCallProps> = ({
         setRemoteStreams((prev) => {
           const newStreams = new Map(prev);
           for (const [key, stream] of newStreams) {
-            if (stream.peerId === peerId) {
+            if ((stream as RemoteStream).peerId === peerId) {
               console.log('Removing stream for peer:', peerId, 'key:', key);
               newStreams.delete(key);
             }
@@ -496,7 +496,6 @@ const VideoCall: React.FC<VideoCallProps> = ({
   const handleToggleAudio = async () => {
     if (!webrtcClient) {
       console.error('❌ WebRTC client not available');
-      alert("vghjk")
       return;
     }
 

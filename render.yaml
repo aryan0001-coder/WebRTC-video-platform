@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: webrtc-video-platform
+    env: node
+    buildCommand: npm run install:all && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: MEDIASOUP_ANNOUNCED_IP
+        value: localhost
+      - key: RECORDINGS_PATH
+        value: ./recordings

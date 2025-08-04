@@ -3,6 +3,10 @@
 /node_modules
 /build
 
+# Frontend build (will be built during deployment)
+frontend/build
+frontend/node_modules
+
 # Logs
 logs
 *.log
@@ -54,3 +58,6 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Recordings
+recordings/
